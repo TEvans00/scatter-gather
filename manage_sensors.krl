@@ -5,8 +5,8 @@ ruleset manage_sensors {
       Manages a collection of temperature sensors
     >>
     author "Tyla Evans"
-    provides sensors, temperatures
-    shares sensors, temperatures
+    provides sensors, temperatures, reports
+    shares sensors, temperatures, reports
     use module io.picolabs.wrangler alias wrangler
     use module io.picolabs.subscription alias subs
   }
@@ -21,9 +21,9 @@ ruleset manage_sensors {
         }
       ).map(
         function(sensor){
-          eci = sensor{"Tx"}.klog("eci:")
-          host = (sensor{"Tx_host"}.defaultsTo(meta:host)).klog("host:")
-          profile = wrangler:picoQuery(eci,"sensor_profile","profile",{},host).klog("profile:")
+          eci = sensor{"Tx"}
+          host = sensor{"Tx_host"}.defaultsTo(meta:host)
+          profile = wrangler:picoQuery(eci,"sensor_profile","profile",{},host)
           info = sensor.put("name", profile{"name"})
           info
         }
@@ -40,12 +40,20 @@ ruleset manage_sensors {
           return acc.put(eci, {"name": name, "temperatures": temperatures})
         }, {})
     }
+
+    reports = function() {
+      num = ((ent:reports.length() < 5) => (ent:reports.length() - 1) | 4).klog("num reports:")
+      report_ids = (ent:reports.keys().reverse().slice(num))
+      ent:reports.filter(function(v,k){report_ids >< k})
+    }
   }
 
   rule intialization {
     select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
     always {
       ent:eci_to_name := {}
+      ent:reports := {}
+      ent:report_id := 0
     }
   }
 
@@ -172,6 +180,60 @@ ruleset manage_sensors {
       raise wrangler event "child_deletion_request"
         attributes {"eci": eci};
       clear ent:eci_to_name{eci}
+    }
+  }
+
+  rule start_report {
+    select when sensor_manager report_request
+    pre {
+      rcn = ent:report_id.klog("rcn:")
+      sensors = sensors()
+      report_data = {
+        "total_sensors": sensors.length(),
+        "sensors_responded": 0,
+        "temperatures": []
+      }.klog("initial report data:")
+    }
+    fired {
+      ent:reports{rcn} := report_data
+      raise sensor_manager event "report_initialized"
+        attributes {"rcn": rcn, "sensors": sensors}
+      ent:report_id := ent:report_id + 1
+    }
+  }
+
+  rule send_report_requests {
+    select when sensor_manager report_initialized
+      rcn re#(.*)#
+      setting(rcn)
+    foreach sensors() setting(sensor)
+    pre {
+      channel = sensor{"Tx"}.klog("sensor_channel:")
+    }
+    if channel then
+      event:send({
+        "eci": channel,
+        "domain": "sensor",
+        "type": "report_request",
+        "attrs": {
+          "rcn": rcn
+        }
+      })
+  }
+
+  rule collect_report {
+    select when sensor report_created
+    rcn re#(.*)#
+    setting(rcn)
+    pre {
+      name = (event:attrs{"sensor"}{"name"}).klog("name:")
+      data = (event:attrs{"temp"}.put({"sensor": name})).klog("data:")
+      num_responded = (ent:reports{rcn}{"sensors_responded"} + 1).klog("sensors_responded:")
+      report_data = (ent:reports{rcn}{"temperatures"}.append(data)).klog("temperatures:")
+    }
+    always {
+      ent:reports{rcn} := ent:reports{rcn}.put(["sensors_responded"], num_responded)
+      ent:reports{rcn} := ent:reports{rcn}.put(["temperatures"], report_data)
     }
   }
 }

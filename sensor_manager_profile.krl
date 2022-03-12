@@ -20,7 +20,7 @@ ruleset sensor_manager_profile {
     pre {
       body = ("Warning: Sensor " + event:attrs{"name"} + " has detected a temperature of " + event:attrs{"temperature"} + " degrees, which is above the threshold of " + event:attrs{"threshold"} + " degrees.").klog("temperature warning message: ")
     }
-    if false then sdk:sendMessage(notification_number, "+16066033227", body) setting(response)
+    if true then sdk:sendMessage(notification_number, "+16066033227", body) setting(response)
   }
 
 }

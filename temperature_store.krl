@@ -4,6 +4,8 @@ ruleset temperature_store {
     author "Tyla Evans"
     provides temperatures, threshold_violations, inrange_temperatures
     shares temperatures, threshold_violations, inrange_temperatures
+    use module sensor_profile alias profile
+    use module io.picolabs.subscription alias subs
   }
 
   global {
@@ -57,5 +59,22 @@ ruleset temperature_store {
       ent:threshold_violations := ent:threshold_violations.defaultsTo([], "initialization was needed").klog("current temperature violations:");
       ent:threshold_violations := ent:threshold_violations.append({"temp": temperature, "time": timestamp}).klog("new temperature violations:");
     }
+  }
+
+  rule send_recent_temperature {
+    select when sensor report_request
+      rcn re#(.*)#
+      setting(rcn)
+    pre {
+      latest_temperature = (ent:temperatures.reverse().head()).klog("latest temp:")
+      profile = profile:profile().klog("profile:")
+      Rx_channel = event:eci.klog("Rx:")
+      Tx_channel = (subs:established().filter(
+        function(sub){
+          sub{"Rx"} == Rx_channel
+        }
+      )[0]{"Tx"}).klog("Tx:")
+    }
+    event:send({"eci":Tx_channel, "domain":"sensor", "type":"report_created", "attrs":event:attrs.put({"sensor": profile, "temp": latest_temperature})})
   }
 }
